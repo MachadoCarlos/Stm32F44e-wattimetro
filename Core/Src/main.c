@@ -32,7 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define NUM_AMOSTRAS 100
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,6 +45,8 @@ ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 ADC_HandleTypeDef hadc3;
 DMA_HandleTypeDef hdma_adc1;
+
+TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
 
@@ -79,11 +81,14 @@ static void MX_ADC1_Init(void);
 static void MX_ADC2_Init(void);
 static void MX_ADC3_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_TIM2_Init(void);
 void StartDefaultTask(void *argument);
 void LerADC(void *argument);
 
 /* USER CODE BEGIN PFP */
-
+// Vetor de 32 bits: armazena V
+uint32_t buffer_dma[NUM_AMOSTRAS / 2];
+uint16_t tensao_grafico; //  VARIAVEL GLOBAL PARA O GRAFICO
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -125,7 +130,14 @@ int main(void)
   MX_ADC2_Init();
   MX_ADC3_Init();
   MX_USART1_UART_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+
+
+  HAL_ADC_Start(&hadc2);
+  HAL_ADC_Start(&hadc3);
+  HAL_ADCEx_MultiModeStart_DMA(&hadc1, buffer_dma, NUM_AMOSTRAS/2);
+  HAL_TIM_Base_Start(&htim2);
 
   /* USER CODE END 2 */
 
@@ -249,10 +261,10 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
   hadc1.Init.ScanConvMode = DISABLE;
-  hadc1.Init.ContinuousConvMode = ENABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DMAContinuousRequests = ENABLE;
@@ -311,7 +323,7 @@ static void MX_ADC2_Init(void)
   hadc2.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
   hadc2.Init.Resolution = ADC_RESOLUTION_12B;
   hadc2.Init.ScanConvMode = DISABLE;
-  hadc2.Init.ContinuousConvMode = ENABLE;
+  hadc2.Init.ContinuousConvMode = DISABLE;
   hadc2.Init.DiscontinuousConvMode = DISABLE;
   hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc2.Init.NbrOfConversion = 1;
@@ -362,7 +374,7 @@ static void MX_ADC3_Init(void)
   hadc3.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
   hadc3.Init.Resolution = ADC_RESOLUTION_12B;
   hadc3.Init.ScanConvMode = DISABLE;
-  hadc3.Init.ContinuousConvMode = ENABLE;
+  hadc3.Init.ContinuousConvMode = DISABLE;
   hadc3.Init.DiscontinuousConvMode = DISABLE;
   hadc3.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc3.Init.NbrOfConversion = 1;
@@ -397,6 +409,51 @@ static void MX_ADC3_Init(void)
   /* USER CODE BEGIN ADC3_Init 2 */
 
   /* USER CODE END ADC3_Init 2 */
+
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 0;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 899;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -471,6 +528,11 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
+    if(hadc->Instance == ADC1) {
+        osSemaphoreRelease(DmaProntoHandle);
+    }
+}
 
 /* USER CODE END 4 */
 
@@ -502,10 +564,32 @@ void StartDefaultTask(void *argument)
 void LerADC(void *argument)
 {
   /* USER CODE BEGIN LerADC */
+	// Limpa a "falsa" disponibilidade do semáforo antes de começar
+	  osSemaphoreAcquire(DmaProntoHandle, 0);
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+  // Aguarda o DMA ler as 100 amostras
+	  if (osSemaphoreAcquire(DmaProntoHandle, osWaitForever) == osOK)
+	  {
+		  //  Le o buffer de 32 bits como se fosse um buffer linear de 16 bits
+		  uint16_t *amostras_ordenadas = (uint16_t*) buffer_dma;
+		  uint32_t soma_quadrados = 0;
+
+		  for(int i = 0; i < NUM_AMOSTRAS; i++)
+		  {
+			// O indice [i] agora contem a leitura pura (0 a 4095),
+			// perfeitamente sequenciada no tempo:
+			// i=0 (ADC1), i=1 (ADC2), i=2 (ADC3), i=3 (ADC1 de novo), etc...
+
+			uint16_t amostra_tensao = amostras_ordenadas[i];
+			soma_quadrados += (uint32_t)(amostra_tensao * amostra_tensao);
+		   tensao_grafico=amostra_tensao;
+
+
+		  }
+		  osDelay(1);
+	  }
   }
   /* USER CODE END LerADC */
 }
